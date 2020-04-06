@@ -4,10 +4,10 @@
 ;			By M.Kajihara
 ;==============================================================================
 
-ver		equ	"4.8r"
+ver		equ	"4.8s"
 vers		equ	48H
-verc		equ	"r"
-date		equ	"Jan.10th 2020"
+verc		equ	"s"
+date		equ	"Jan.22nd 2020"
 
 mdata_def	equ	16
 voice_def	equ	8
@@ -728,17 +728,43 @@ opn_init:
 	mov	[psnoi_last],0
 no_init_psnoi:
 ;==============================================================================
-;	PAN/HARDLFO DEFAULT
+;	SSG-EG RESET (4.8s)
+;==============================================================================
+if	board2
+	mov	bx,2
+	call	sel44
+sr01:
+endif
+	mov	cx,15		;効果音とか気にしない、でいいや…仕様で。
+	mov	dx,09000h	;SSG-EG = 0
+sr02:	mov	al,cl
+	and	al,3
+	jz	sr03
+	call	opnset
+sr03:	inc	dh
+	loop	sr02
+if	board2
+	call	sel46
+	dec	bx
+	jnz	sr01
+	call	sel44
+endif
+;==============================================================================
+;	YM2203ならここでおしまい
 ;==============================================================================
 ife	board2
 	cmp	[ongen],0	;2203?
 	jnz	init_2608
 	ret
+;==============================================================================
+;	以下YM2608用
+;	PAN/HARDLFO DEFAULT
+;==============================================================================
 init_2608:
 endif
 if	board2
 	mov	bx,2
-	call	sel44		;mmainには飛ばない状況下なので大丈夫
+;;	call	sel44		;mmainには飛ばない状況下なので大丈夫
 pd01:
 endif
 	mov	dx,0b4c0h	;PAN=MID/HARDLFO=OFF
@@ -747,11 +773,11 @@ pd00:
 	cmp	[fm_effec_flag],0
 	jz	pd02
 	cmp	cx,1
-	jnz	pd02
 if	board2
+	jnz	pd02
 	cmp	bx,1
-	jz	pd03
 endif
+	jz	pd03		;ここbugってたわ…(4.8s)
 pd02:	call	opnset
 pd03:	inc	dh
 	loop	pd00

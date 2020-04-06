@@ -1,0 +1,2 @@
+optasm vedse;
+optlink vedse;

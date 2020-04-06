@@ -6,9 +6,9 @@
 ;==============================================================================
 ;	.186
 
-ver		equ	"4.8r"		;version
+ver		equ	"4.8s"		;version
 vers		equ	48h
-date		equ	"2020/01/21"	;date
+date		equ	"2020/01/22"	;date
 
 ifndef	hyouka
 hyouka		equ	0		;1で評価版(save機能cut)
@@ -4272,6 +4272,8 @@ ge_cut:
 ;	Sspeed[,depth]
 ;==============================================================================
 sousyoku_onp_set:
+	cmp	byte ptr [si],"E"
+	jz	ssgeg_set
 	mov	dh,"S"
 	call	get_clock
 	mov	[ss_speed],al
@@ -4313,6 +4315,83 @@ ss_cut:
 	inc	si
 	call	lngset		;dummy
 	jmp	olc03
+
+;==============================================================================
+;	"SE" Command [SSGEG指定] →yコマンド変換
+;	SEslot,num
+;==============================================================================
+ssgeg_set:
+	mov	dx,"S"*256+17
+ife	efc
+	cmp	[ongen],psg		;FMでなければエラー
+	jnc	error
+endif
+	mov	al,[opl_flg]		;OPL/OPMではエラー
+	or	al,[x68_flg]
+	jnz	error
+	inc	si
+
+	call	lngset2
+	mov	dx,"S"*256+6
+	jc	error
+	cmp	byte ptr [si],","
+	jnz	error
+	mov	dl,2
+	test	al,al
+	jz	error
+	cmp	al,16
+	jnc	error
+
+	inc	si
+	push	ax
+	call	lngset2			;AL=num
+	pop	cx			;CL=slot
+	mov	dx,"S"*256+6
+	jc	error
+	mov	dl,2
+	cmp	al,16
+	jnc	error
+
+	mov	dh,[part]		;DHにFMのSSGEG reg取得
+	dec	dh
+	cmp	dh,6
+	jc	sss_notfm3ex
+	mov	dh,2			;6以上はFM3exのみ
+sss_notfm3ex:
+	cmp	dh,3
+	jc	sss_notfm2
+	sub	dh,3			;FM2ならpart -3
+sss_notfm2:
+	add	dh,90h			;SSGEG $90 + [part]
+
+	shr	cl,1			;指定slotに対応したyコマンド発行
+	jnc	sss_slot2
+	call	sss_set1slot
+sss_slot2:
+	add	dh,8
+	shr	cl,1
+	jnc	sss_slot3
+	call	sss_set1slot
+sss_slot3:
+	sub	dh,4
+	shr	cl,1
+	jnc	sss_slot4
+	call	sss_set1slot
+sss_slot4:
+	add	dh,8
+	shr	cl,1
+	jnc	sss_fin
+	call	sss_set1slot
+sss_fin:
+	jmp	olc0
+
+sss_set1slot:
+	mov	byte ptr es:[di],0efh
+	inc	di
+	mov	es:[di],dh
+	inc	di
+	stosb
+	ret
 
 ;==============================================================================
 ;	"Z" Command [小節の長さ指定]
@@ -8418,4 +8497,3 @@ stack_seg	segment	stack
 stack_seg	ends
 
 end	mc
-
