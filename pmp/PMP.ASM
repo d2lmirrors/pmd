@@ -2,7 +2,7 @@
 ;	[PMP]	stop / mset / play
 ;
 
-date	equ	"1997/01/29"
+date	equ	"2020/01/21"
 
 @code	segment	para	public	'@code'
 	assume	cs:@code,ds:@code,es:@code
@@ -77,6 +77,8 @@ option_get:
 	jz	reset_pcmflg
 	cmp	al,"O"
 	jz	reset_memoflg
+	cmp	al,"W"
+	jz	set_watchflg
 	jmp	usage
 
 ;==============================================================================
@@ -91,6 +93,13 @@ reset_pcmflg:
 ;==============================================================================
 reset_memoflg:
 	mov	cs:[memo_flg],0
+	jmp	option_loop
+
+;==============================================================================
+;	/W option ... Watch File Update
+;==============================================================================
+set_watchflg:
+	mov	cs:[watch_flg],1
 	jmp	option_loop
 
 ;==============================================================================
@@ -156,7 +165,84 @@ pp_non_pcm_read:
 	jz	pp_non_memo_put
 	call	memo_put
 pp_non_memo_put:
+	cmp	[filenameofs],0
+	jz	pp_exit
+	cmp	[watch_flg],0
+	jnz	watch_main
+pp_exit:
 	msdos_exit
+
+;==============================================================================
+;	ファイル更新監視	20/01/21
+;==============================================================================
+watch_main:
+	mov	dx,[filenameofs]
+	mov	ax,3d00h
+	int	21h		;再オープン
+	jc	pp_exit
+	mov	bx,ax		;BX=ファイルハンドル
+	mov	ax,5700h
+	int	21h		;日付・時刻を取得
+	jc	pp_exit
+	mov	si,cx		;SI:DI = 時刻:日付
+	mov	di,dx
+	mov	ah,3eh
+	int	21h		;クローズ
+
+	print_mes	watch_mes
+
+	pmd	get_workadr
+	mov	bp,dx
+	mov	bp,ds:-2[bp]
+	lea	bp,_TimerAtime[bp]
+	push	cs
+	push	ds
+	pop	es
+	pop	ds		;ES:[BP] = PMD TimerAtime
+
+watch_loop:
+	mov	cx,15		;TimerA 15回分待ち (約1/4秒)
+watch_loop2:
+	mov	al,es:[bp]
+watch_wait:
+	out	5fh,al		;適当にウエイトを入れる
+	cmp	al,es:[bp]
+	jz	watch_wait
+	loop	watch_loop2
+
+	mov	dl,-1
+	mov	ah,06h
+	int	21h		;一文字入力
+	jz	watch_check
+	cmp	al,"!"		;SPACE or CTRL Code
+	jc	pp_exit
+
+watch_check:
+	mov	dx,[filenameofs]
+	mov	ax,3d00h
+	int	21h		;再オープン
+	jc	watch_loop	;オープンできない：書き込み中かも？
+	mov	bx,ax		;BX=ファイルハンドル
+	mov	ax,5700h
+	int	21h		;日付・時刻を取得
+	jc	pp_exit
+	cmp	si,cx
+	jnz	watch_next
+	cmp	di,dx
+	jnz	watch_next
+	mov	ah,3eh
+	int	21h		;クローズ
+	jmp	watch_loop
+
+watch_next:
+	mov	ah,3eh
+	int	21h		;クローズ
+	mov	dx,[filenameofs]
+	mov	ax,3d00h
+	int	21h		;もう一回再オープン
+	jc	watch_loop	;オープンできない：書き込み中かも？
+	mov	[fhand],ax
+	jmp	rm_00		;再読み込み＋再生
 
 ;==============================================================================
 ;	/S opiton ... stop
@@ -300,6 +386,7 @@ mfn_ofs_notset:
 	call	opnhnd		;".MZ"
 	jc	readerror
 read_main:
+	mov	[filenameofs],dx	;Watch用
 
 	pmd	get_file_adr
 	mov	si,bp
@@ -611,22 +698,27 @@ pcm_access_mes	db	"ＡＤＰＣＭがアクセス中です。",13,10,"$"
 
 over_error_mes	db	"曲データバッファが足りません。",13,10,"$"
 
+watch_mes	db	13,10,"ファイル更新を監視しています。",13,10,"$"
+
 pmp_USAGE_MES	DB	"Usage:  pmp /{P|S|Fn|E}",13,10
-		db	"     or pmp [/{A|O}] filename[.M/.M2/.MZ]",13,10,13,10
+		db	"     or pmp [/{A|O|W}] filename[.M/.M2/.MZ]",13,10,13,10
 		db	"Option: /P   ... (pcmset/)play(/put)",13,10
 		db	"        /S   ... stop",13,10
 		db	"        /Fn  ... fadeout (n=speed def.=16)",13,10
 		db	"        /E   ... stop SSG/FM Effects",13,10
 		db	"        /A   ... not set PPS/PCM file",13,10
 		db	"        /O   ... not put Title Messages",13,10
+		db	"        /W   ... watch File Update",13,10
 		db	"   filename  ... stop/load(/pcmset)/play(/put)",13,10
 		db	"$"
 
-pmp_title_mes	db	"Professional Music Driver [P.M.D.] player for PMD ver.4.8l～",13,10
+pmp_title_mes	db	"Professional Music Driver [P.M.D.] player for PMD ver.4.8r～",13,10
 		db	"                  Programmed by M.Kajihara ",date,13,10,13,10,"$"
 
 memo_flg	db	0
 pcm_flg		db	0
+watch_flg	db	0
+filenameofs	dw	0
 
 	include	viruschk.inc	;ウイルス感染check
 
@@ -637,4 +729,3 @@ pcm_data	db	32*1024 dup(?)
 
 @code	ends
 end	start
-

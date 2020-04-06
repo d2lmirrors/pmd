@@ -4,10 +4,10 @@
 ;			By M.Kajihara
 ;==============================================================================
 
-ver		equ	"4.8q"
+ver		equ	"4.8r"
 vers		equ	48H
-verc		equ	"q"
-date		equ	"Aug.5th 1998"
+verc		equ	"r"
+date		equ	"Jan.10th 2020"
 
 mdata_def	equ	16
 voice_def	equ	8
@@ -5549,12 +5549,18 @@ lfoinitp:
 	and	ah,0fh
 lip_00:	mov	onkai_def[di],al
 	cmp	ah,0fh
-	jz	lfo_exit
+;	4.8r	修正
+	jz	lfo_exitp
 	mov	porta_num[di],0	;ポルタメントは初期化
 
 	test	[tieflag],1	; ﾏｴ ｶﾞ & ﾉ ﾄｷ ﾓ INIT ｼﾅｲ｡
-	jnz	lfo_exit
-
+	jz	seinit
+lfo_exitp:
+	push	ax
+	call	soft_env	; 前が & の場合 -> 1回 SoftEnv処理
+	pop	ax
+	jmp	lfo_exit
+;	ここまで
 ;==============================================================================
 ;	ソフトウエアエンベロープ初期化
 ;==============================================================================
@@ -9895,16 +9901,16 @@ intpop2:
 set_option:
 	lodsb
 	cmp	al,"/"
-	jz	option
+	jz	option_main
 	cmp	al,"-"
-	jz	option
+	jz	option_main
 	cmp	al," "
 	jc	so_ret
 	jz	set_option
 	jmp	usage
 so_ret:	ret
 
-option:
+option_main:
 	lodsb
 	and	al,11011111b	;小文字＞大文字
 	push	bx

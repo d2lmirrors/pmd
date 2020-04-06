@@ -1,14 +1,14 @@
 ;==============================================================================
 ;
 ;	MML Compiler/Effect Compiler FOR PC-9801/88VA 
-;							ver 4.8
+;							ver 4.8r
 ;
 ;==============================================================================
 ;	.186
 
-ver		equ	"4.8q"		;version
+ver		equ	"4.8r"		;version
 vers		equ	48h
-date		equ	"2019/12/30"	;date
+date		equ	"2020/01/21"	;date
 
 ifndef	hyouka
 hyouka		equ	0		;1で評価版(save機能cut)
@@ -3854,7 +3854,7 @@ _fb_set:
 	jmp	olc0
 
 ;==============================================================================
-;	"{" Command [Portament_start]
+;	"{" Command [Portament_start] / "{{" Command [分散和音開始]
 ;==============================================================================
 porta_start:
 	cmp	[skip_flag],0
@@ -3865,12 +3865,23 @@ porta_start:
 	mov	byte ptr es:[di],0dah
 	inc	di
 	mov	[porta_flag],1
-	jmp	olc0
+
+;	分散和音開始アドレスをセット	4.8r
+	mov	[bunsan_start],0
+	cmp	byte ptr [si],"{"
+	jnz	pst_end
+	inc	si
+	mov	[bunsan_start],di
+
+pst_end:jmp	olc0
 
 ;==============================================================================
-;	"}" Command [Portament_end]
+;	"}" Command [Portament_end] / "}}" Command [分散和音終了]
 ;==============================================================================
 porta_end:
+	cmp	byte ptr [si],"}"	;4.8r
+	jz	bunsan_end		;//
+
 	cmp	[skip_flag],0
 	jnz	pe_skip
 	cmp	[porta_flag],1
@@ -3942,6 +3953,255 @@ pe_skip:
 	jc	error
 	call	futen_skip
 ;------	ここまで
+	jmp	olc03
+
+;==============================================================================
+;	"}}" Command [分散和音終了]	4.8r
+;	{{cdeg}}lng[,cnt[,tie[,gate[,vol]]]]
+;==============================================================================
+bunsan_end:
+	inc	si
+	cmp	[skip_flag],0
+	jnz	bunsan_skip
+
+;	和音数のチェック
+	mov	bx,[bunsan_start]
+	test	bx,bx
+	mov	dx,"}"*256+34
+	jz	error
+	mov	cx,di
+	sub	cx,bx
+	jz	bunsan_error	; 音なし
+	shr	cx,1		; cx = 分散和音数
+	jc	bunsan_error	; 間が奇数バイトでエラー
+	cmp	cx,17		; 17音以上でエラー
+	jnc	bunsan_error
+	mov	[bunsan_count],cl
+
+;	bunsan_work に音階をセットしていく
+	mov	bp,offset bunsan_work
+bend_loop:
+	mov	al,es:[bx]
+	test	al,al
+	js	bunsan_error	;音階ではない
+	mov	ds:[bp],al
+	inc	bx
+	inc	bx
+	inc	bp
+	cmp	di,bx
+	jnz	bend_loop
+
+;	パラメータ取り込み
+	call	lngset2			;prm1 全体音長
+	test	bh,bh
+	jnz	bunsan_error
+	call	lngcal
+	call	futen
+	jc	bunsan_error
+	mov	[bunsan_length],al
+
+	xor	al,al
+	mov	[bunsan_vol],al		;音量 def = ±0
+	mov	[bunsan_gate],al	;ゲート def = 0
+	inc	al
+	mov	[bunsan_1cnt],al	;1cnt def = %1
+	mov	[bunsan_tieflag],al	;Tie def = ON(1)
+
+	cmp	byte ptr [si],","
+	jnz	bunsan_main
+	inc	si
+	call	lngset2			;prm2 1音符長
+	jc	bunsan_prm3
+	test	bh,bh
+	jnz	bunsan_error
+	call	lngcal
+	call	futen
+	jc	bunsan_error
+	mov	[bunsan_1cnt],al
+bunsan_prm3:
+	cmp	byte ptr [si],","
+	jnz	bunsan_main
+	inc	si
+	call	lngset2			;prm3 タイフラグ
+	jc	bunsan_prm4
+	test	bh,bh
+	jnz	bunsan_error
+	cmp	al,2
+	jnc	bunsan_error
+	mov	[bunsan_tieflag],al
+bunsan_prm4:
+	cmp	byte ptr [si],","
+	jnz	bunsan_main
+	inc	si
+	call	lngset2			;prm4 ゲート長
+	jc	bunsan_prm5
+	test	bh,bh
+	jnz	bunsan_error
+	cmp	al,[bunsan_length]
+	jnc	bunsan_error
+	mov	[bunsan_gate],al
+	sub	[bunsan_length],al
+bunsan_prm5:
+	cmp	byte ptr [si],","
+	jnz	bunsan_main
+	inc	si
+	call	getnum			;prm5 音量±
+	mov	[bunsan_vol],dl
+
+
+;	分散和音展開
+bunsan_main:
+	mov	di,[bunsan_start]
+	dec	di		;ポルタコマンドをつぶす
+
+;	ループ回数チェック
+	mov	al,[bunsan_1cnt]
+	mul	[bunsan_count]		;AX = 音符数 x 一音符の長さ = 1ループの長さ
+	test	ah,ah
+	jnz	bunsan_error
+	mov	[bunsan_1loop],al
+	xor	cx,cx
+	mov	cl,[bunsan_length]
+	xchg	ax,cx			;AX = 全体の長さ / CX = 1ループの長さ
+	cmp	cx,ax
+	jnc	bunsan_last		;1ループに満たない場合
+	div	cl			;AL = 全体の長さ \ 1ループの長さ = ループ回数
+	cmp	[bunsan_tieflag],0
+	jz	bunsan_setloop
+	test	ah,ah			;タイありで割り切れた場合は
+	jnz	bunsan_setloop
+	dec	al			;ループ回数 -1
+
+bunsan_setloop:
+	cmp	al,1			;ループ1回ならループ不要
+	jz	bunsan_nonloop
+
+	push	ax
+	mov	al,0f9h			;"[" Loop Start
+	stosb
+	mov	bx,di			; BX = 戻り先
+	inc	di
+	inc	di
+	push	bx
+	call	bunsan_set1loop
+	pop	bx
+	mov	al,0f8h			;"]" Loop End
+	stosb
+	pop	ax
+	stosb
+	stosb
+	mul	[bunsan_1loop]
+	sub	[bunsan_length],al
+	mov	ax,bx
+	sub	ax,offset m_buf
+	stosw
+	lea	ax,[di-4]
+	sub	ax,offset m_buf
+	mov	es:[bx],ax		;戻り先セット
+	jmp	bunsan_last
+
+;	1ループでいいのでループ不要
+bunsan_nonloop:
+	call	bunsan_set1loop
+	mov	al,[bunsan_1loop]
+	sub	[bunsan_length],al
+
+;	ループ後最終セット
+bunsan_last:
+	cmp	[bunsan_length],0
+	jz	bunsan_exit		;タイなしの場合ここで0になることがある
+	mov	bx,offset bunsan_work
+bunsan_last_loop:
+	mov	al,[bx]
+	stosb
+	inc	bx
+	mov	al,[bunsan_1cnt]
+	mov	ah,[bunsan_length]
+	cmp	al,ah
+	jnc	bunsan_lastnote
+	stosb
+	sub	[bunsan_length],al
+	cmp	[bunsan_tieflag],1
+	jnz	bunsan_last_loop
+	mov	al,0fbh
+	stosb
+	jmp	bunsan_last_loop
+
+bunsan_lastnote:
+	mov	al,ah
+	stosb
+
+;	分散和音終了処理
+bunsan_exit:
+	mov	ah,[bunsan_gate]	;Gateがある場合は休符追加
+	test	ah,ah
+	jz	bunsan_exit2
+	mov	al,0fh
+	stosb
+	mov	al,ah
+	stosb
+bunsan_exit2:
+	xor	ax,ax
+	mov	[bunsan_start],ax
+	mov	[porta_flag],al
+	jmp	olc0
+
+;	1ループ分音階をセット
+bunsan_set1loop:
+	mov	bx,offset bunsan_work
+	xor	cx,cx
+	mov	cl,[bunsan_count]	;CX=音符数
+bunsan_s1l_loop:
+	mov	al,[bx]
+	stosb				;音階セット
+	inc	bx
+	mov	al,[bunsan_1cnt]
+	stosb				;長さセット
+	cmp	[bunsan_tieflag],1
+	jnz	bunsan_s1l_fin
+	mov	al,0fbh			;"&"セット
+	stosb
+bunsan_s1l_fin:
+	loop	bunsan_s1l_loop
+	mov	ah,[bunsan_vol]
+	test	ah,ah
+	jz	bunsan_s1l_exit
+	mov	al,0e3h			;)x
+	jns	bunsan_sl1_volset
+	dec	al			;(x
+	neg	ah
+bunsan_sl1_volset:
+	stosb
+	mov	al,ah
+	stosb
+bunsan_s1l_exit:
+	ret
+
+bunsan_error:			;分散和音／エラー時の処理
+	mov	dx,"}"*256+35
+	jmp	error
+
+bunsan_skip:			;分散和音／スキップ時の処理
+	call	lngset2
+	call	futen_skip
+	cmp	byte ptr [si],","
+	jnz	bskip_end
+	inc	si
+	call	lngset2
+	call	futen_skip
+	cmp	byte ptr [si],","
+	jnz	bskip_end
+	inc	si
+	call	lngset2
+	cmp	byte ptr [si],","
+	jnz	bskip_end
+	inc	si
+	call	lngset2
+	cmp	byte ptr [si],","
+	jnz	bskip_end
+	inc	si
+	call	getnum
+bskip_end:
 	jmp	olc03
 
 ;==============================================================================
@@ -7668,7 +7928,7 @@ err_table	dw	err00,err01,err02,err03,err04,err05,err06,err07
 		dw	err08,err09,err10,err11,err12,err13,err14,err15
 		dw	err16,err17,err18,err19,err20,err21,err22,err23
 		dw	err24,err25,err26,err27,err28,err29,err30,err31
-		dw	err32,err33
+		dw	err32,err33,err34,err35
 
 errmes_1	db	" Error ",eof
 errmes_2	db	": Part ",eof
@@ -7682,7 +7942,7 @@ err00	db	"オプション指定が間違っています。",cr,lf,eof
 err01	db	"MML中に理解不能な文字があります。",cr,lf,eof
 err02	db	"指定された数値が異常です。",cr,lf,eof
 err03	db	"MMLファイルが読み込めません。",cr,lf,eof
-err04	db	"MMLファイルが書き込めません。",cr,lf,eof
+err04	db	"Mファイルが書き込めません。",cr,lf,eof
 err05	db	"FFファイルが書き込めません。",cr,lf,eof
 err06	db	"パラメータの指定が足りません。",cr,lf,eof
 err07	db	"使用出来ない文字を指定しています。",cr,lf,eof
@@ -7712,6 +7972,8 @@ err30	db	"音色が定義されていません。",cr,lf,eof
 err31	db	"直前の音符長が圧縮または加工されています。",cr,lf,eof
 err32	db	"Rパートでタイ・スラーは使用出来ません。",cr,lf,eof
 err33	db	"可変長MML変数の定義数が256を越えました。",cr,lf,eof
+err34	db	"分散和音開始記号 {{ がありません。",cr,lf,eof
+err35	db	"分散和音コマンド中の指定が間違っています。",cr,lf,eof
 
 err_seg		ends
 
@@ -8079,6 +8341,17 @@ mml_endadr	dw	?
 loopnest	equ	32	; MAX 32 NEST 
 loptbl	db	loopnest*2 dup (?)
 lextbl	db	loopnest*2 dup (?)
+
+					;分散和音ワーク
+bunsan_start	dw	?		;開始オフセット
+bunsan_count	db	?		;音符数
+bunsan_work	db	16 dup(?)	;音階x16
+bunsan_length	db	?		;全体の長さ
+bunsan_1cnt	db	?		;一音符の長さ
+bunsan_tieflag	db	?		;タイフラグ
+bunsan_1loop	db	?		;一ループの長さ
+bunsan_gate	db	?		;Gate
+bunsan_vol	db	?		;音量±
 
 prgbuf_start	label	byte
 prgbuf_length	equ	26
